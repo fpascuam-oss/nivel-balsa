@@ -1,0 +1,18 @@
+# Arduino build files
+*.elf
+*.hex
+*.bin
+*.eep
+*.elf.*
+*.bin.*
+*.hex.*
+*.map
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# PlatformIO
+/.pio/
