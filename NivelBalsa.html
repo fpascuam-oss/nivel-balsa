@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Balsa Mejana</title>
+    <!-- Librería Paho MQTT 1.1.0 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+    <style>
+        :root { 
+            --bg: #f0f4f8; 
+            --panel: #ffffff; 
+            --water: #3182ce; 
+            --border: #2d3748;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .card { background: var(--panel); padding: 2rem; border-radius: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 320px; }
+        
+        .tank-container { 
+            width: 130px; height: 190px; 
+            border: 5px solid var(--border); 
+            border-radius: 10px 10px 25px 25px; 
+            margin: 20px auto; 
+            position: relative; 
+            overflow: hidden; 
+            background: #edf2f7; 
+        }
+        .water-fill { 
+            position: absolute; bottom: 0; width: 100%; 
+            background: linear-gradient(180deg, #63b3ed, var(--water)); 
+            transition: height 1.5s ease-in-out; height: 0%; 
+        }
+        .perc-label { 
+            position: absolute; top: 50%; left: 50%; 
+            transform: translate(-50%, -50%); 
+            font-weight: 800; font-size: 1.6rem; 
+            z-index: 2; color: #1a202c; 
+            text-shadow: 0 0 8px rgba(255,255,255,0.8); 
+        }
+
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+        .data-box { background: #f7fafc; padding: 10px; border-radius: 12px; border: 1px solid #e2e8f0; }
+        .label { font-size: 0.7rem; color: #718096; text-transform: uppercase; font-weight: bold; }
+        .value { font-size: 1.1rem; font-weight: 700; display: block; margin-top: 4px; }
+        
+        #status-bar { margin-top: 20px; font-size: 0.75rem; padding: 10px; border-radius: 10px; font-weight: 600; }
+        .online { background: #c6f6d5; color: #22543d; }
+        .offline { background: #fed7d7; color: #822727; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2 style="margin:0; color: #2c5282;">Balsa Mejana</h2>
+    <p style="margin: 5px 0 0; font-size: 0.85rem; color: #a0aec0;">Monitoreo en Tiempo Real</p>
+    
+    <div class="tank-container">
+        <div id="fillLevel" class="water-fill"></div>
+        <div id="txtPerc" class="perc-label">--%</div>
+    </div>
+
+    <div class="data-grid">
+        <div class="data-box">
+            <span class="label">Distancia</span>
+            <span id="txtDist" class="value">-- mm</span>
+        </div>
+        <div class="data-box">
+            <span class="label">Batería</span>
+            <span id="txtBat" class="value">-- V</span>
+        </div>
+    </div>
+
+    <div id="status-bar" class="offline">○ Desconectado</div>
+</div>
+
+<script>
+    // 1. CONFIGURACIÓN DEL SENSOR (BALSA)
+    const DIST_VACIO = 1300; 
+    const DIST_LLENO = 300;  
+
+    // 2. CREDENCIALES THE THINGS NETWORK
+    const TTN_HOST = "eu1.cloud.thethings.network";
+    const TTN_PORT = 443;
+    const TTN_USER = "nivel-balsa-dragino@ttn"; 
+    const TTN_PASS = "NNSXS.G24SW52K5CR2BH6VPJUIZQOYR6NH6OYLA57BPZQ.UKQEMVEUEH6OGMIEC65IOQX2QP522LL6MTSD76BZ5CX6LKK7JLRQ";
+    const TTN_DEV_ID = "lssd75-nivel-balsa";
+
+    // 3. INICIALIZACIÓN DEL CLIENTE
+    // Formato: (host, puerto, path, clientId)
+    const client = new Paho.Client(TTN_HOST, Number(TTN_PORT), "/mqtt", "balsa_web_" + Math.floor(Math.random() * 9999));
+
+    // Evento: Recepción de datos
+    client.onMessageArrived = (message) => {
+        try {
+            const json = JSON.parse(message.payloadString);
+            const payload = json.uplink_message.decoded_payload;
+            
+            // Extraer valores (ajustado a las claves típicas del Dragino LSN50/LDDS75)
+            const dist = parseInt(payload.Distance || payload.distance || 0);
+            const bat = payload.Bat || payload.vbat || 0;
+
+            if (dist > 0) {
+                // Cálculo de porcentaje
+                let porcentaje = ((DIST_VACIO - dist) / (DIST_VACIO - DIST_LLENO)) * 100;
+                porcentaje = Math.max(0, Math.min(100, porcentaje)); 
+
+                // Actualizar UI
+                document.getElementById('fillLevel').style.height = porcentaje + "%";
+                document.getElementById('txtPerc').innerText = Math.round(porcentaje) + "%";
+                document.getElementById('txtDist').innerText = dist + " mm";
+                document.getElementById('txtBat').innerText = bat + " V";
+            }
+        } catch (e) {
+            console.error("Error al procesar los datos de la balsa:", e);
+        }
+    };
+
+    // Evento: Pérdida de conexión
+    client.onConnectionLost = (responseObject) => {
+        const bar = document.getElementById('status-bar');
+        bar.innerText = "○ Conexión Perdida";
+        bar.className = "offline";
+        console.warn("Socket cerrado:", responseObject.errorMessage);
+    };
+
+    // 4. CONEXIÓN
+    const connectOptions = {
+        userName: TTN_USER,
+        password: TTN_PASS,
+        useSSL: true,
+        mqttVersion: 4,
+        cleanSession: true,
+        onSuccess: () => {
+            const bar = document.getElementById('status-bar');
+            bar.innerText = "● Conectado a la Mejana";
+            bar.className = "online";
+            // Suscripción al tópico de subida del dispositivo
+            client.subscribe(`v3/${TTN_USER}/devices/${TTN_DEV_ID}/up`);
+            console.log("MQTT Conectado con éxito.");
+        },
+        onFailure: (err) => {
+            const bar = document.getElementById('status-bar');
+            bar.innerText = "Error: " + (err.errorMessage || "Socket Error");
+            bar.className = "offline";
+            console.error("Fallo de conexión:", err);
+        }
+    };
+
+    // Iniciar el proceso
+    console.log("Iniciando conexión a " + TTN_HOST);
+    client.connect(connectOptions);
+</script>
+</body>
+</html>
