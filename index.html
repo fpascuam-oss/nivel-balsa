@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitor Balsa Mejana</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
         body { background: #f0f4f8; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-        .container { background: white; border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 100%; }
+        .container { background: white; border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; max-width: 450px; width: 100%; }
         h1 { color: #2b6cb0; margin-bottom: 5px; font-size: 1.6rem; }
         p { color: #718096; font-size: 0.9rem; margin-bottom: 20px; }
         
@@ -23,10 +24,13 @@
         }
         .pct-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 2.2rem; font-weight: 900; z-index: 5; color: #2d3748; }
 
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 25px; }
         .card { background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0; }
         .label { font-size: 0.75rem; color: #a0aec0; text-transform: uppercase; font-weight: bold; display: block; }
         .val { font-size: 1.3rem; font-weight: 700; color: #2d3748; }
+
+        /* Contenedor de la Gráfica */
+        .chart-container { position: relative; margin: 0 auto 20px; height: 180px; width: 100%; }
 
         .status-bar { font-size: 0.8rem; padding: 10px; border-radius: 8px; background: #edf2f7; color: #4a5568; margin-top: 15px; }
         .btn-update { background: #3182ce; color: white; border: none; padding: 10px 20px; border-radius: 25px; cursor: pointer; margin-top: 10px; font-weight: bold; }
@@ -37,7 +41,7 @@
 
 <div class="container">
     <h1>Balsa Mejana</h1>
-    <p>Tudela - Mejana Gourmet</p>
+    <p>Tudela - Bardenas Tech-Hub</p>
 
     <div class="balsa-visual">
         <div id="waterLevel" class="water"></div>
@@ -49,12 +53,15 @@
         <div class="card"><span class="label">Batería</span><span id="displayBat" class="val">-- V</span></div>
     </div>
 
+    <div class="chart-container">
+        <canvas id="historyChart"></canvas>
+    </div>
+
     <div id="statusBar" class="status-bar">Cargando datos...</div>
     <button class="btn-update" onclick="fetchBalsaData()">🔄 Actualizar ahora</button>
 </div>
 
 <script>
-    // --- CONFIGURACIÓN IDÉNTICA A TU CÓDIGO FUNCIONAL ---
     const APP_ID = "nivel-balsa-dragino";
     const API_KEY = "NNSXS.G24SW52K5CR2BH6VPJUIZQOYR6NH6OYLA57BPZQ.UKQEMVEUEH6OGMIEC65IOQX2QP522LL6MTSD76BZ5CX6LKK7JLRQ";
     const DEVICE_ID = "lssd75-nivel-balsa";
@@ -63,13 +70,44 @@
     const DIST_VACIO = 1300; 
     const DIST_LLENO = 300;  
 
+    let balsaChart = null; // Variable global para guardar la instancia de la gráfica
+
+    // Función auxiliar para inicializar la gráfica con diseño limpio
+    function initChart() {
+        const ctx = document.getElementById('historyChart').getContext('2d');
+        balsaChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Las horas irán aquí
+                datasets: [{
+                    label: 'Nivel (%)',
+                    data: [], // Los porcentajes irán aquí
+                    borderColor: '#3182ce',
+                    backgroundColor: 'rgba(99, 179, 237, 0.2)',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { min: 0, max: 100, grid: { color: '#e2e8f0' } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+    }
+
     async function fetchBalsaData() {
         const status = document.getElementById('statusBar');
         try {
             status.innerText = "Consultando a TTN...";
             
-            // Usamos la Storage API (igual que en tu código de gasoil)
-            const url = `https://eu1.cloud.thethings.network/api/v3/as/applications/${APP_ID}/packages/storage/uplink_message?last=24h&order=-received_at&limit=1`;
+            // Cambiado limit=1 por limit=10 para traer el histórico
+            const url = `https://eu1.cloud.thethings.network/api/v3/as/applications/${APP_ID}/packages/storage/uplink_message?last=24h&order=-received_at&limit=10`;
             
             const response = await fetch(url, {
                 headers: { "Authorization": `Bearer ${API_KEY}`, "Accept": "application/json" }
@@ -78,30 +116,51 @@
             if (!response.ok) throw new Error("Error en la respuesta de red");
 
             const text = await response.text();
-            // El formato NDJSON requiere separar por líneas
             const lines = text.split('\n').filter(l => l.trim() !== '');
             if (lines.length === 0) throw new Error("No hay datos recientes");
 
-            const lastMsg = JSON.parse(lines[0]).result;
-            const payload = lastMsg.uplink_message.decoded_payload;
+            // Arrays temporales para acumular datos para el gráfico
+            let historicalPct = [];
+            let historicalLabels = [];
 
-            // Extraer valores (ajustado a los nombres de Dragino)
-            const dist = parseInt(payload.Distance || payload.distance || 0);
-            const bat = payload.Bat || payload.vbat || 0;
-
-            if (dist > 0) {
-                let pct = ((DIST_VACIO - dist) / (DIST_VACIO - DIST_LLENO)) * 100;
-                pct = Math.max(0, Math.min(100, pct));
-
-                // Actualizar UI
-                document.getElementById('waterLevel').style.height = pct + "%";
-                document.getElementById('displayPct').innerText = Math.round(pct) + "%";
-                document.getElementById('displayDist').innerText = dist + " mm";
-                document.getElementById('displayBat').innerText = bat + " V";
+            // Procesamos las líneas (TTN las devuelve de la más nueva a la más antigua)
+            lines.forEach((line, index) => {
+                const record = JSON.parse(line).result;
+                const payload = record.uplink_message.decoded_payload;
+                const dist = parseInt(payload.Distance || payload.distance || 0);
                 
-                const fecha = new Date(lastMsg.received_at).toLocaleTimeString();
-                status.innerText = "Actualizado a las " + fecha;
-                status.style.color = "#2f855a";
+                if (dist > 0) {
+                    let pct = ((DIST_VACIO - dist) / (DIST_VACIO - DIST_LLENO)) * 100;
+                    pct = Math.max(0, Math.min(100, pct));
+                    
+                    const hora = new Date(record.received_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+
+                    // Guardamos en los arrays
+                    historicalPct.push(Math.round(pct));
+                    historicalLabels.push(hora);
+
+                    // Si es el registro más nuevo (el índice 0), actualizamos la interfaz principal
+                    if (index === 0) {
+                        const bat = payload.Bat || payload.vbat || 0;
+                        document.getElementById('waterLevel').style.height = pct + "%";
+                        document.getElementById('displayPct').innerText = Math.round(pct) + "%";
+                        document.getElementById('displayDist').innerText = dist + " mm";
+                        document.getElementById('displayBat').innerText = bat + " V";
+                        status.innerText = "Actualizado a las " + hora;
+                        status.style.color = "#2f855a";
+                    }
+                }
+            });
+
+            // Para que la gráfica se dibuje de izquierda (más antiguo) a derecha (más reciente), invertimos los datos
+            historicalPct.reverse();
+            historicalLabels.reverse();
+
+            // Actualizar los datos dentro de la gráfica
+            if (balsaChart) {
+                balsaChart.data.labels = historicalLabels;
+                balsaChart.data.datasets[0].data = historicalPct;
+                balsaChart.update();
             }
 
         } catch (err) {
@@ -110,6 +169,9 @@
             status.style.color = "#c53030";
         }
     }
+
+    // Inicializar el gráfico al cargar la página
+    initChart();
 
     // Carga inicial y auto-actualización cada 1 minuto
     fetchBalsaData();
